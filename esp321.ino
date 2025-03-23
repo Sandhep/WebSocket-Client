@@ -25,7 +25,7 @@ void onMessageCallback(WebsocketsMessage message) {
     Serial.println(message.data());
 
     // Parse incoming JSON message
-    StaticJsonDocument<200> doc;
+    JsonDocument<200> doc;
     DeserializationError error = deserializeJson(doc, message.data());
 
     if (!error) {
@@ -47,7 +47,7 @@ void onMessageCallback(WebsocketsMessage message) {
 
 // Function to send JSON messages to WebSocket server
 void sendJsonMessage(const char* event, const char* value) {
-    StaticJsonDocument<200> doc;
+    JsonDocument;
     doc["event"] = event;
     doc["value"] = value;
 
