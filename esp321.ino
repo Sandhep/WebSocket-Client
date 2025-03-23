@@ -2,7 +2,7 @@
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
 
-const char* ssid = "ESP32-WebSocket";    // WiFi SSID
+const char* ssid = "IoT-Gateway";    // WiFi SSID
 const char* password = "12345678";       // WiFi Password
 
 // This client's fixed identifier - must match one in the server's predefined list
