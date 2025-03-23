@@ -25,7 +25,7 @@ void onMessageCallback(WebsocketsMessage message) {
     Serial.println(message.data());
 
     // Parse incoming JSON message
-    JsonDocument<200> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, message.data());
 
     if (!error) {
