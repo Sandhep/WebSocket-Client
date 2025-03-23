@@ -47,7 +47,7 @@ void onMessageCallback(WebsocketsMessage message) {
 
 // Function to send JSON messages to WebSocket server
 void sendJsonMessage(const char* event, const char* value) {
-    JsonDocument;
+    JsonDocument doc;
     doc["event"] = event;
     doc["value"] = value;
 
