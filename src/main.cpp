@@ -2,79 +2,86 @@
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
 
-const char* ssid = "IoT-Gateway";
-const char* password = "12345678";
+const char* ssid = "IoT-Gateway";    // WiFi SSID
+const char* password = "12345678";       // WiFi Password
 
 // This client's fixed identifier - must match one in the server's predefined list
-const char* clientID = "device2";  // Use "device1" for the first client
+const char* clientID = "device1";        // Use "device1" for the first client
+
+// Pin definitions
+const int OVERHEAD_TANK_PIN = 19;  
+const int UNDERGROUND_TANK_PIN = 18;  
+const int Pump = 26;
+
+// ISR variables 
+
+volatile bool buttonPressed_OHT = false;
+volatile unsigned long lastInterruptTime_OHT = 0;
+
+volatile bool buttonPressed_UGT = false;
+volatile unsigned long lastInterruptTime_UGT = 0;
+
+const unsigned long debounceTime = 200; // 200 ms debounce time
+
+volatile bool OHT_State = false;
+volatile bool UGT_State = false;
+
+// Track last known states to avoid duplicate messages
+int lastOHTState = HIGH;  // Assume initial state as Full
+int lastUGTState = HIGH;  // Assume initial state as Full
+
+String mode = "MANUAL";  // Default to Manual mode
 
 using namespace websockets;
 WebsocketsClient client;
 
-void onMessageCallback(WebsocketsMessage message) {
-    Serial.print("Received: ");
-    Serial.println(message.data());
-    
-    // You could add JSON parsing here to handle different responses
-    StaticJsonDocument<200> doc;
-    DeserializationError error = deserializeJson(doc, message.data());
-    
-    if (!error) {
-        String event = doc["event"];
-        String value = doc["value"];
-        
-        Serial.print("Event: ");
-        Serial.print(event);
-        Serial.print(", Value: ");
-        Serial.println(value);
-        
-        // Handle specific events from server
-        if (event == "welcome") {
-            Serial.print("Server recognized me as: ");
-            Serial.println(value);
-        }
-    }
-}
-
-void sendJsonMessage(const char* event, const char* value) {
-    StaticJsonDocument<200> doc;
-    doc["event"] = event;
-    doc["value"] = value;
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    
-    client.send(jsonString);
-    Serial.print("Sent: ");
-    Serial.println(jsonString);
-}
+void autoLogic();
+void startupSequence();
+void onMessageCallback(WebsocketsMessage message);
+void sendJsonMessage(const char* event, const char* value);
+void IRAM_ATTR OHT_ISR();
+void IRAM_ATTR UGT_ISR(); 
+// Setup Section   
 
 void setup() {
-    Serial.begin(115200);
     
+    Serial.begin(115200);
+
+    // Connect to WiFi
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
         Serial.println("Connecting to WiFi...");
     }
-    
+
     Serial.println("Connected to WiFi!");
     Serial.print("Client IP Address: ");
     Serial.println(WiFi.localIP());
-    
+
+    pinMode(OVERHEAD_TANK_PIN, INPUT_PULLUP);  // Enable pull-up for overhead tank
+    pinMode(UNDERGROUND_TANK_PIN, INPUT_PULLUP); // Enable pull-up for underground tank
+    attachInterrupt(digitalPinToInterrupt(OVERHEAD_TANK_PIN), OHT_ISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(UNDERGROUND_TANK_PIN), UGT_ISR, CHANGE);
+
+    OHT_State = digitalRead(OVERHEAD_TANK_PIN);
+    UGT_State = digitalRead(UNDERGROUND_TANK_PIN);
+
+    pinMode(Pump,OUTPUT);
+    digitalWrite(Pump,HIGH);
+
+    // Attach WebSocket message callback
     client.onMessage(onMessageCallback);
-    
-    // Connect with the clientID as a URL parameter
+
+    // Connect to WebSocket server
     String serverURL = "ws://192.168.4.1:81/?clientId=";
     serverURL += clientID;
-    
+
     if (client.connect(serverURL)) {
         Serial.println("Connected to WebSocket Server!");
         Serial.print("Using client ID: ");
         Serial.println(clientID);
-        
-        // Send an initial register message
-        sendJsonMessage("register", clientID);
+        startupSequence();
+
     } else {
         Serial.println("WebSocket connection failed!");
     }
@@ -82,39 +89,149 @@ void setup() {
 
 void loop() {
     client.poll();  // Ensure continuous WebSocket communication
-    
-    static unsigned long lastMessageTime = 0;
-    if (millis() - lastMessageTime > 3000) {
-        // Alternate between different sensor states
-        static bool toggleState = false;
-        toggleState = !toggleState;
-        
-        if (toggleState) {
-            sendJsonMessage("OHT_FLOAT", "ON");
-            delay(500);  // Small delay between messages
-            sendJsonMessage("UGT_FLOAT", "ON");
-        } else {
-            sendJsonMessage("OHT_FLOAT", "OFF");
-            delay(500);  // Small delay between messages
-            sendJsonMessage("UGT_FLOAT", "OFF");
+
+    if (buttonPressed_OHT) {
+
+        Serial.println("OHT Float Position Changed!");
+        delay(500);
+        OHT_State = digitalRead(OVERHEAD_TANK_PIN);
+        sendJsonMessage("OHT_FLOAT", OHT_State ? "OFF":"ON");
+        buttonPressed_OHT = false;
+
+        if(mode == "AUTO"){
+            autoLogic();
         }
-        
-        lastMessageTime = millis();
     }
     
-    // Check if connection was lost and reconnect
+    if (buttonPressed_UGT) {
+
+        Serial.println("UGT Float Position Changed!");
+        delay(500);
+        UGT_State = digitalRead(UNDERGROUND_TANK_PIN);
+        sendJsonMessage("UGT_FLOAT",  UGT_State ? "OFF":"ON");
+        buttonPressed_UGT = false;
+
+        if(mode == "AUTO"){
+            autoLogic();
+        }
+    }
+
+    // Check if WebSocket connection is lost and reconnect
+
     if (!client.available()) {
         Serial.println("Connection lost, reconnecting...");
-        
+
         String serverURL = "ws://192.168.4.1:81/?clientId=";
         serverURL += clientID;
-        
+
         if (client.connect(serverURL)) {
             Serial.println("Reconnected to WebSocket Server!");
-            sendJsonMessage("register", clientID);
+            startupSequence();
         } else {
             Serial.println("Reconnection failed");
             delay(5000);  // Wait before trying again
         }
     }
 }
+
+
+// Auto Logic
+
+void autoLogic(){
+
+    if (OHT_State == LOW && UGT_State == HIGH) {
+
+        digitalWrite(Pump, LOW);  // Pump ON
+        sendJsonMessage("PumpState", "ON");
+
+    } else {
+
+        digitalWrite(Pump, HIGH);  // Pump OFF
+        sendJsonMessage("PumpState", "OFF");
+
+    }
+}
+
+// Function to handle incoming WebSocket messages
+
+void onMessageCallback(WebsocketsMessage message) {
+    Serial.print("Received: ");
+    Serial.println(message.data());
+
+    // Parse incoming JSON message
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, message.data());
+
+    if (!error) {
+        String event = doc["event"];
+        String value = doc["value"];
+
+        Serial.print("Event: ");
+        Serial.print(event);
+        Serial.print(", Value: ");
+        Serial.println(value);
+
+        // Handle specific events from server
+        if (event == "welcome") {
+
+            Serial.print("Server recognized me as: ");
+            Serial.println(value);
+
+        }else if (event == "Mode") {
+
+            mode = value;
+            Serial.print("Mode switched to: ");
+            Serial.println(mode);
+
+            if(value == "AUTO"){
+                autoLogic();
+            }
+
+        }else if(event == "Pump_State" && mode == "MANUAL"){
+
+            digitalWrite(Pump, value == "ON" ? LOW : HIGH);
+
+        }
+    }
+}
+
+// Function to send JSON messages to WebSocket server
+
+void sendJsonMessage(const char* event, const char* value) {
+    JsonDocument doc;
+    doc["event"] = event;
+    doc["value"] = value;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+
+    client.send(jsonString);
+    Serial.print("Sent: ");
+    Serial.println(jsonString);
+}
+
+// ISR for Float Switches
+
+void IRAM_ATTR OHT_ISR() {
+    unsigned long currentTime = millis();
+    if (currentTime - lastInterruptTime_OHT > debounceTime) {
+      buttonPressed_OHT = true;
+      lastInterruptTime_OHT = currentTime;
+    }
+}
+  
+  
+void IRAM_ATTR UGT_ISR() {
+    unsigned long currentTime = millis();
+    if (currentTime - lastInterruptTime_UGT > debounceTime) {
+      buttonPressed_UGT = true;
+      lastInterruptTime_UGT = currentTime;
+    }
+}
+
+void startupSequence(){
+    sendJsonMessage("register", clientID);
+    sendJsonMessage("OHT_FLOAT", OHT_State ? "OFF":"ON");
+    sendJsonMessage("UGT_FLOAT",  UGT_State ? "OFF":"ON");
+}
+  
