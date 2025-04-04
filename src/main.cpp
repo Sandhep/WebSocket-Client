@@ -138,18 +138,24 @@ void loop() {
 // Auto Logic
 
 void autoLogic(){
-
-    if (OHT_State == LOW && UGT_State == HIGH) {
-
-        digitalWrite(Pump, LOW);  // Pump ON
-        sendJsonMessage("PumpState", "ON");
-
-    } else {
-
-        digitalWrite(Pump, HIGH);  // Pump OFF
-        sendJsonMessage("PumpState", "OFF");
-
-    }
+    
+        // Read current float states again to ensure fresh data
+        OHT_State = digitalRead(OVERHEAD_TANK_PIN);
+        UGT_State = digitalRead(UNDERGROUND_TANK_PIN);
+    
+        if (OHT_State == LOW && UGT_State == HIGH) {
+            // UGT Full & OHT Empty → Turn pump ON
+            digitalWrite(Pump, LOW);  // Pump ON
+            sendJsonMessage("PumpState", "ON");
+            Serial.println("AUTO MODE: Pump turned ON (UGT Full, OHT Empty)");
+    
+        } else {
+            // Any other condition → Turn pump OFF
+            digitalWrite(Pump, HIGH);  // Pump OFF
+            sendJsonMessage("PumpState", "OFF");
+            Serial.println("AUTO MODE: Pump turned OFF (condition not met)");
+        }
+    
 }
 
 // Function to handle incoming WebSocket messages
