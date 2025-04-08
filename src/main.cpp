@@ -31,11 +31,14 @@ int lastOHTState = HIGH;  // Assume initial state as Full
 int lastUGTState = HIGH;  // Assume initial state as Full
 
 String mode = "MANUAL";  // Default to Manual mode
+String timer = "DISABLED"; // Default to Disabled
+String timerOut = "OFF"; // Default OFF
 
 using namespace websockets;
 WebsocketsClient client;
 
 void autoLogic();
+void controlPump(String state,String event);
 void startupSequence();
 void onMessageCallback(WebsocketsMessage message);
 void sendJsonMessage(const char* event, const char* value);
@@ -138,24 +141,49 @@ void loop() {
 // Auto Logic
 
 void autoLogic(){
-    
+
         // Read current float states again to ensure fresh data
         OHT_State = digitalRead(OVERHEAD_TANK_PIN);
         UGT_State = digitalRead(UNDERGROUND_TANK_PIN);
-    
+
+        String autoOut = "OFF";
+
         if (OHT_State == LOW && UGT_State == HIGH) {
             // UGT Full & OHT Empty → Turn pump ON
-            digitalWrite(Pump, LOW);  // Pump ON
-            sendJsonMessage("PumpState", "ON");
-            Serial.println("AUTO MODE: Pump turned ON (UGT Full, OHT Empty)");
-    
-        } else {
-            // Any other condition → Turn pump OFF
-            digitalWrite(Pump, HIGH);  // Pump OFF
-            sendJsonMessage("PumpState", "OFF");
-            Serial.println("AUTO MODE: Pump turned OFF (condition not met)");
+            autoOut = "ON";
         }
-    
+
+        if(timer == "ENABLED" && mode == "AUTO"){
+            if(timerOut == "ON" && autoOut == "ON"){
+                controlPump("ON","Timer and Auto");
+            }else{
+                controlPump("OFF","Timer and Auto");
+            }
+        }else if(timer == "ENABLED" && mode == "MANUAL"){
+            if(timerOut == "ON"){
+                controlPump("ON","Timer");
+            }else{
+                controlPump("OFF","Timer");
+            }
+        }else if(mode == "AUTO" && timer == "DISABLED"){
+            if(autoOut == "ON"){
+                controlPump("ON","Auto");
+            }else{
+                controlPump("OFF","Auto");
+            }
+        }
+}
+
+// Pump Control
+
+void controlPump(String state,String event){
+
+    digitalWrite(Pump, state == "ON" ? LOW : HIGH);  
+    sendJsonMessage("PumpState", state == "ON" ? "ON" : "OFF");
+    char buffer[50];
+    sprintf(buffer, "%s MODE: Pump turned %s", event, state);
+    Serial.println(buffer);    
+
 }
 
 // Function to handle incoming WebSocket messages
@@ -189,14 +217,27 @@ void onMessageCallback(WebsocketsMessage message) {
             Serial.print("Mode switched to: ");
             Serial.println(mode);
 
-            if(value == "AUTO"){
-                autoLogic();
-            }
+            autoLogic();
 
         }else if(event == "Pump_State" && mode == "MANUAL"){
 
             digitalWrite(Pump, value == "ON" ? LOW : HIGH);
 
+        }else if(event == "Timer"){
+
+             timer = value;
+             Serial.print("Timer is: ");
+             Serial.println(timer);
+
+             autoLogic();
+
+        }else if(event == "TimerOut"){
+
+             timerOut = value;
+             Serial.print("Timer is");
+             Serial.println(timerOut == "ON"? "Started" : "Stopped");
+             
+             autoLogic();
         }
     }
 }
